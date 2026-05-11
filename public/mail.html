@@ -505,6 +505,16 @@
             width: 320px !important;
         }
 
+        .filter-tools input[type="text"] {
+            width: 360px !important;
+        }
+
+        .filter-summary {
+            margin: 12px 0 0;
+            color: #7f8c8d;
+            font-size: 14px;
+        }
+
         .search-tools button,
         .mail-list-header button {
             margin-right: 0 !important;
@@ -617,6 +627,12 @@
                     <button onclick="searchSelectedInbox(false)">搜索选中收件箱</button>
                     <button class="delete-btn" onclick="searchSelectedInbox(true)">删除匹配邮件</button>
                 </div>
+                <div class="delimiter-input filter-tools">
+                    <input type="text" id="email-filter" placeholder="快速定位邮箱，输入邮箱关键词" oninput="applyEmailFilter()">
+                    <button onclick="clearEmailFilter()">清空定位</button>
+                    <button onclick="viewSelectedAllMailboxes()">查看选中收件箱+垃圾箱</button>
+                </div>
+                <div class="filter-summary" id="filter-summary"></div>
             </div>
             <table class="email-table" id="email-table">
                 <thead>
@@ -660,6 +676,7 @@
                 <thead>
                     <tr>
                         <th>邮箱账号</th>
+                        <th>文件夹</th>
                         <th>发件人</th>
                         <th>主题</th>
                         <th>日期</th>
@@ -772,6 +789,62 @@
         // 分页相关变量
         let currentPage = 1;
         let itemsPerPage = 5;
+        let currentEmailRows = [];
+
+        function getEmailFilterText() {
+            const filterInput = document.getElementById('email-filter');
+            return filterInput ? filterInput.value.trim().toLowerCase() : '';
+        }
+
+        function getFilteredEmailRows() {
+            const filterText = getEmailFilterText();
+            const data = getStoredEmailData();
+
+            return data
+                .map((item, index) => ({ item, originalIndex: index }))
+                .filter(row => {
+                    if (!filterText) {
+                        return true;
+                    }
+
+                    return [
+                        row.item.email,
+                        row.item.clientId
+                    ].join(' ').toLowerCase().includes(filterText);
+                });
+        }
+
+        function refreshEmailTable(resetPage) {
+            currentEmailRows = getFilteredEmailRows();
+            if (resetPage) {
+                currentPage = 1;
+            }
+
+            const totalPages = Math.max(1, Math.ceil(currentEmailRows.length / itemsPerPage));
+            if (currentPage > totalPages) {
+                currentPage = totalPages;
+            }
+
+            renderTable(currentEmailRows);
+            renderPagination(currentEmailRows.length);
+            toggleNoData(currentEmailRows.length === 0);
+
+            const totalCount = getStoredEmailData().length;
+            const filterSummary = document.getElementById('filter-summary');
+            const filterText = getEmailFilterText();
+            filterSummary.textContent = filterText
+                ? `已定位到 ${currentEmailRows.length} 个邮箱，共 ${totalCount} 个。`
+                : `共 ${totalCount} 个邮箱。`;
+        }
+
+        function applyEmailFilter() {
+            refreshEmailTable(true);
+        }
+
+        function clearEmailFilter() {
+            document.getElementById('email-filter').value = '';
+            refreshEmailTable(true);
+        }
 
         // 从 localStorage 加载数据
         function loadData() {
@@ -780,22 +853,22 @@
             if (password) {
                 document.getElementById('password').value = password;
             }
-            renderTable(data);
-            renderPagination(data.length);
-            toggleNoData(data.length === 0);
+            refreshEmailTable(false);
             updateDashboard(data); // 更新仪表盘数据
         }
 
         // 渲染表格
-        function renderTable(data) {
+        function renderTable(rows) {
             const emailTableBody = document.querySelector('#email-table tbody');
             emailTableBody.innerHTML = '';
 
             const start = (currentPage - 1) * itemsPerPage;
             const end = start + itemsPerPage;
-            const pageData = data.slice(start, end);
+            const pageData = rows.slice(start, end);
 
-            pageData.forEach((item, index) => {
+            pageData.forEach((rowData) => {
+                const item = rowData.item;
+                const originalIndex = rowData.originalIndex;
                 const row = document.createElement('tr');
 
                 // 添加多选框
@@ -814,11 +887,12 @@
             <td>${escapeHtml(item.clientId)}</td>
             <td class="refresh-token" title="${escapeHtml(item.refreshToken)}">${escapeHtml(item.refreshToken)}</td>
             <td class="actions">
-                <button class="view" onclick="viewInbox(${start + index})">收件箱</button>
-                <button class="view" onclick="viewJunk(${start + index})">垃圾箱</button>
-                <button class="view" onclick="searchInbox(${start + index}, false)">搜收件箱</button>
-                <button class="delete" onclick="searchInbox(${start + index}, true)">删匹配</button>
-                <button class="delete" onclick="deleteEmail(${start + index})">删除</button>
+                <button class="view" onclick="viewInbox(${originalIndex})">收件箱</button>
+                <button class="view" onclick="viewJunk(${originalIndex})">垃圾箱</button>
+                <button class="view" onclick="viewAllMailboxes(${originalIndex})">一起看</button>
+                <button class="view" onclick="searchInbox(${originalIndex}, false)">搜收件箱</button>
+                <button class="delete" onclick="searchInbox(${originalIndex}, true)">删匹配</button>
+                <button class="delete" onclick="deleteEmail(${originalIndex})">删除</button>
             </td>
         `;
 
@@ -867,6 +941,8 @@
                 const data = getStoredEmailData();
                 const tempData = data.filter(item => !selectedItems.includes(item.email));
                 localStorage.setItem('emailData', JSON.stringify(tempData));
+                selectedItems = [];
+                document.getElementById('select-all').checked = false;
                 loadData()
             }
         }
@@ -945,17 +1021,13 @@
         // 切换分页
         function changePage(page) {
             currentPage = page;
-            const data = getStoredEmailData();
-            renderTable(data);
-            renderPagination(data.length);
+            refreshEmailTable(false);
         }
 
         function changeItemsPerPage(value) {
             itemsPerPage = parseInt(value, 10);
             currentPage = 1; // 切换每页显示条数时重置到第一页
-            const data = getStoredEmailData();
-            renderTable(data);
-            renderPagination(data.length);
+            refreshEmailTable(false);
         }
 
         // 显示/隐藏无数据提示
@@ -986,6 +1058,29 @@
 
             // 加载邮件列表
             loadMailList(item.refreshToken, item.clientId, item.email, 'Junk');
+        }
+
+        function viewAllMailboxes(index) {
+            const data = getStoredEmailData();
+            const item = data[index];
+            if (!item) {
+                showModal('错误', '邮箱账号不存在，请刷新页面后重试。');
+                return;
+            }
+
+            currentMailPage = 1;
+            loadAllMailboxes([{ ...item, mailboxLabel: '收件箱+垃圾箱' }]);
+        }
+
+        function viewSelectedAllMailboxes() {
+            const accounts = getSelectedAccounts();
+            if (accounts.length === 0) {
+                showModal('错误', '请先勾选要查看的邮箱账号！');
+                return;
+            }
+
+            currentMailPage = 1;
+            loadAllMailboxes(accounts);
         }
 
         function getSearchSettings() {
@@ -1110,65 +1205,11 @@
         // 加载邮件列表
         function loadMailList(refreshToken, clientId, email, mailbox) {
             showLoading(); // 显示 Loading
-            const password = localStorage.getItem('password');
-            const query = new URLSearchParams({
-                refresh_token: refreshToken,
-                client_id: clientId,
-                email,
-                mailbox,
-                response_type: 'json',
-                password: password || ''
-            });
-            const apiUrl = `/api/mail-all?${query.toString()}`;
-
-            fetch(apiUrl)
-                .then(response => {
-                    // 检查响应状态码
-                    if (!response.ok) {
-                        // 如果状态码不是 2xx，抛出错误
-                        if (response.status === 500) {
-                            // 如果是 500 错误，尝试解析返回的 JSON 数据
-                            return response.json().then(errorData => {
-                                // 如果返回的错误信息是 "Nothing to fetch"，则设置 mailData 为空
-                                if (errorData.error === "Nothing to fetch") {
-                                    // 更新全局邮件数据
-                                    mailData = [];
-                                    // 渲染邮件列表
-                                    renderMailTable(mailData);
-                                    showMailSection(`${email} ${mailbox} 暂无邮件。`);
-                                    // 返回一个 resolved 的 Promise，避免进入 catch 块
-                                    return Promise.resolve();
-                                } else {
-                                    // 其他 500 错误
-                                    throw new Error('服务器内部错误，请稍后重试。');
-                                }
-                            });
-                        } else {
-                            // 其他非 500 错误
-                            if (response.status == 401) {
-                                throw response;
-                                return
-                            }
-                            // 其他非 500 错误
-                            throw new Error(`请求失败，状态码：${response.status}`);
-                        }
-                    }
-                    return response.json(); // 解析 JSON 数据
-                })
-                .then(data => {
-                    // 如果 data 存在（即不是 "Nothing to fetch" 的情况），更新全局邮件数据
-                    if (data) {
-
-                        mailData = data.map(item => ({
-                            ...item,
-                            accountEmail: item.accountEmail || email,
-                            mailbox: item.mailbox || mailbox
-                        }));
-
-                        // 渲染邮件列表
-                        renderMailTable(mailData);
-                        showMailSection(`${email} ${mailbox} 共 ${mailData.length} 封邮件。`);
-                    }
+            fetchMailboxMessages({ refreshToken, clientId, email }, mailbox)
+                .then(messages => {
+                    mailData = messages;
+                    renderMailTable(mailData);
+                    showMailSection(`${email} ${mailbox} 共 ${mailData.length} 封邮件。`);
                 })
                 .catch(error => {
 
@@ -1187,6 +1228,85 @@
                 .finally(() => {
                     hideLoading(); // 隐藏 Loading
                 });
+        }
+
+        function fetchMailboxMessages(account, mailbox) {
+            const password = localStorage.getItem('password');
+            const query = new URLSearchParams({
+                refresh_token: account.refreshToken,
+                client_id: account.clientId,
+                email: account.email,
+                mailbox,
+                response_type: 'json',
+                password: password || ''
+            });
+            const apiUrl = `/api/mail-all?${query.toString()}`;
+
+            return fetch(apiUrl)
+                .then(response => {
+                    // 检查响应状态码
+                    if (!response.ok) {
+                        // 如果状态码不是 2xx，抛出错误
+                        if (response.status === 500) {
+                            // 如果是 500 错误，尝试解析返回的 JSON 数据
+                            return response.json().then(errorData => {
+                                // 如果返回的错误信息是 "Nothing to fetch"，则设置 mailData 为空
+                                if (errorData.error === "Nothing to fetch") {
+                                    return [];
+                                } else {
+                                    // 其他 500 错误
+                                    throw new Error('服务器内部错误，请稍后重试。');
+                                }
+                            });
+                        } else {
+                            // 其他非 500 错误
+                            if (response.status == 401) {
+                                const authError = new Error('密码验证失败');
+                                authError.status = 401;
+                                throw authError;
+                            }
+                            // 其他非 500 错误
+                            throw new Error(`请求失败，状态码：${response.status}`);
+                        }
+                    }
+                    return response.json(); // 解析 JSON 数据
+                })
+                .then(data => {
+                    return (data || []).map(item => ({
+                        ...item,
+                        accountEmail: item.accountEmail || account.email,
+                        mailbox: item.mailbox || mailbox
+                    }));
+                });
+        }
+
+        async function loadAllMailboxes(accounts) {
+            showLoading();
+
+            const allMessages = [];
+            const errors = [];
+
+            for (const account of accounts) {
+                for (const mailbox of ['INBOX', 'Junk']) {
+                    try {
+                        const messages = await fetchMailboxMessages(account, mailbox);
+                        allMessages.push(...messages);
+                    } catch (error) {
+                        errors.push(`${account.email} ${mailbox}: ${error.message}`);
+                    }
+                }
+            }
+
+            allMessages.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            mailData = allMessages;
+            currentMailPage = 1;
+            renderMailTable(mailData);
+            showMailSection(`已合并查看 ${accounts.length} 个邮箱的收件箱和垃圾箱，共 ${mailData.length} 封邮件。`);
+            hideLoading();
+
+            if (errors.length > 0) {
+                showModal('部分邮箱加载失败', errors.map(escapeHtml).join('<br>'));
+            }
         }
 
         // 渲染邮件表格
@@ -1210,6 +1330,7 @@
                 const deletedText = item.deleted ? '已删除' : '查看';
                 row.innerHTML = `
                     <td>${escapeHtml(item.accountEmail || '')}</td>
+                    <td>${escapeHtml(item.mailbox || '')}</td>
                     <td>${escapeHtml(item.send || '')}</td>
                     <td>${escapeHtml(item.subject || '')}</td>
                     <td>${escapeHtml(item.date || '')}</td>
