@@ -192,6 +192,16 @@
             width: 200px;
         }
 
+        .upload-section .delimiter-input input[type="number"],
+        .upload-section .delimiter-input select {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            margin-right: 10px;
+            background-color: #ffffff;
+            color: #333;
+        }
+
         .upload-section .delimiter-input button {
             padding: 8px 16px;
             background-color: #3498db;
@@ -486,6 +496,41 @@
             opacity: 0.9 !important;
         }
 
+        .search-tools {
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .search-tools input[type="text"] {
+            width: 320px !important;
+        }
+
+        .search-tools button,
+        .mail-list-header button {
+            margin-right: 0 !important;
+        }
+
+        .mail-list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .mail-list-header button {
+            padding: 8px 16px;
+            background-color: #3498db;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .mail-summary {
+            margin: 0 0 15px;
+            color: #7f8c8d;
+        }
+
         .pagination-section {
             display: flex;
             align-items: center;
@@ -562,6 +607,16 @@
                     <button onclick="importEmails()">导入邮箱</button>
                     <button class="delete-btn" onclick="batchDelete()">批量删除</button>
                 </div>
+                <div class="delimiter-input search-tools">
+                    <input type="text" id="search-keywords" placeholder="输入收件箱关键字，多个用逗号分隔">
+                    <select id="match-mode">
+                        <option value="any">命中任一关键字</option>
+                        <option value="all">必须命中全部关键字</option>
+                    </select>
+                    <input type="number" id="scan-limit" min="1" max="2000" value="500" title="扫描最近邮件数量">
+                    <button onclick="searchSelectedInbox(false)">搜索选中收件箱</button>
+                    <button class="delete-btn" onclick="searchSelectedInbox(true)">删除匹配邮件</button>
+                </div>
             </div>
             <table class="email-table" id="email-table">
                 <thead>
@@ -596,13 +651,19 @@
 
         <!-- 邮件列表内容 -->
         <div id="mail-list" class="content-section">
-            <h1>邮件列表</h1>
+            <div class="mail-list-header">
+                <h1 id="mail-list-title">邮件列表</h1>
+                <button onclick="showEmailSection()">返回邮箱管理</button>
+            </div>
+            <p class="mail-summary" id="mail-list-summary"></p>
             <table class="mail-table" id="mail-table">
                 <thead>
                     <tr>
+                        <th>邮箱账号</th>
                         <th>发件人</th>
                         <th>主题</th>
                         <th>日期</th>
+                        <th>匹配关键字</th>
                         <th>操作</th>
                     </tr>
                 </thead>
@@ -644,6 +705,37 @@
         let currentMailPage = 1; // 当前邮件列表的页码
         const mailItemsPerPage = 10; // 每页显示的邮件数量
 
+        function escapeHtml(value) {
+            return String(value || '').replace(/[&<>"']/g, function (char) {
+                return {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#39;'
+                }[char];
+            });
+        }
+
+        function getStoredEmailData() {
+            return JSON.parse(localStorage.getItem('emailData')) || [];
+        }
+
+        function showEmailSection() {
+            document.querySelectorAll('.content-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.getElementById('emails').classList.add('active');
+        }
+
+        function showMailSection(summary) {
+            document.querySelectorAll('.content-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.getElementById('mail-list').classList.add('active');
+            document.getElementById('mail-list-summary').textContent = summary || '';
+        }
+
         // 显示 Loading
         function showLoading() {
             document.getElementById('loading-overlay').style.display = 'flex';
@@ -683,7 +775,7 @@
 
         // 从 localStorage 加载数据
         function loadData() {
-            const data = JSON.parse(localStorage.getItem('emailData')) || [];
+            const data = getStoredEmailData();
             const password = localStorage.getItem('password') || '';
             if (password) {
                 document.getElementById('password').value = password;
@@ -717,13 +809,15 @@
 
                 // 添加其他单元格
                 row.innerHTML += `
-            <td>${item.email}</td>
-            <td>${item.password}</td>
-            <td>${item.clientId}</td>
-            <td class="refresh-token" title="${item.refreshToken}">${item.refreshToken}</td>
+            <td>${escapeHtml(item.email)}</td>
+            <td>${escapeHtml(item.password)}</td>
+            <td>${escapeHtml(item.clientId)}</td>
+            <td class="refresh-token" title="${escapeHtml(item.refreshToken)}">${escapeHtml(item.refreshToken)}</td>
             <td class="actions">
                 <button class="view" onclick="viewInbox(${start + index})">收件箱</button>
                 <button class="view" onclick="viewJunk(${start + index})">垃圾箱</button>
+                <button class="view" onclick="searchInbox(${start + index}, false)">搜收件箱</button>
+                <button class="delete" onclick="searchInbox(${start + index}, true)">删匹配</button>
                 <button class="delete" onclick="deleteEmail(${start + index})">删除</button>
             </td>
         `;
@@ -770,7 +864,7 @@
 
             const confirmDelete = confirm(`确定要删除选中的 ${selectedItems.length} 项吗？`);
             if (confirmDelete) {
-                const data = JSON.parse(localStorage.getItem('emailData')) || [];
+                const data = getStoredEmailData();
                 const tempData = data.filter(item => !selectedItems.includes(item.email));
                 localStorage.setItem('emailData', JSON.stringify(tempData));
                 loadData()
@@ -851,7 +945,7 @@
         // 切换分页
         function changePage(page) {
             currentPage = page;
-            const data = JSON.parse(localStorage.getItem('emailData')) || [];
+            const data = getStoredEmailData();
             renderTable(data);
             renderPagination(data.length);
         }
@@ -859,7 +953,7 @@
         function changeItemsPerPage(value) {
             itemsPerPage = parseInt(value, 10);
             currentPage = 1; // 切换每页显示条数时重置到第一页
-            const data = JSON.parse(localStorage.getItem('emailData')) || [];
+            const data = getStoredEmailData();
             renderTable(data);
             renderPagination(data.length);
         }
@@ -872,7 +966,7 @@
 
         // 查看邮件（收件箱）
         function viewInbox(index) {
-            const data = JSON.parse(localStorage.getItem('emailData')) || [];
+            const data = getStoredEmailData();
             const item = data[index];
 
             // 重置邮件分页为第一页
@@ -884,7 +978,7 @@
 
         // 查看邮件（垃圾箱）
         function viewJunk(index) {
-            const data = JSON.parse(localStorage.getItem('emailData')) || [];
+            const data = getStoredEmailData();
             const item = data[index];
 
             // 重置邮件分页为第一页
@@ -894,11 +988,138 @@
             loadMailList(item.refreshToken, item.clientId, item.email, 'Junk');
         }
 
+        function getSearchSettings() {
+            const keywords = document.getElementById('search-keywords').value.trim();
+            const matchMode = document.getElementById('match-mode').value;
+            const scanLimit = document.getElementById('scan-limit').value || '500';
+
+            if (!keywords) {
+                showModal('错误', '请输入要搜索的关键字！');
+                return null;
+            }
+
+            return { keywords, matchMode, scanLimit };
+        }
+
+        function getSelectedAccounts() {
+            updateSelectedItems();
+            const data = getStoredEmailData();
+            return data.filter(item => selectedItems.includes(item.email));
+        }
+
+        function searchSelectedInbox(deleteMatches) {
+            const accounts = getSelectedAccounts();
+            if (accounts.length === 0) {
+                showModal('错误', '请先勾选要搜索的邮箱账号！');
+                return;
+            }
+
+            runInboxKeywordSearch(accounts, deleteMatches);
+        }
+
+        function searchInbox(index, deleteMatches) {
+            const data = getStoredEmailData();
+            const item = data[index];
+            if (!item) {
+                showModal('错误', '邮箱账号不存在，请刷新页面后重试。');
+                return;
+            }
+
+            runInboxKeywordSearch([item], deleteMatches);
+        }
+
+        async function runInboxKeywordSearch(accounts, deleteMatches) {
+            const settings = getSearchSettings();
+            if (!settings) {
+                return;
+            }
+
+            if (deleteMatches) {
+                const confirmDelete = confirm(`确定删除 ${accounts.length} 个邮箱收件箱中命中关键字的邮件吗？此操作会移动/删除远端邮件，无法从本页面撤销。`);
+                if (!confirmDelete) {
+                    return;
+                }
+            }
+
+            showLoading();
+
+            const allMessages = [];
+            const errors = [];
+            let scanned = 0;
+            let matched = 0;
+            let deleted = 0;
+
+            for (const account of accounts) {
+                try {
+                    const response = await fetch('/api/mail-search', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            refresh_token: account.refreshToken,
+                            client_id: account.clientId,
+                            email: account.email,
+                            mailbox: 'INBOX',
+                            keywords: settings.keywords,
+                            match_mode: settings.matchMode,
+                            scan_limit: settings.scanLimit,
+                            delete_matches: deleteMatches,
+                            password: localStorage.getItem('password') || ''
+                        })
+                    });
+
+                    const result = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(result.details || result.error || `请求失败，状态码：${response.status}`);
+                    }
+
+                    scanned += result.scanned || 0;
+                    matched += result.matched || 0;
+                    deleted += result.deleted || 0;
+
+                    (result.messages || []).forEach(message => {
+                        allMessages.push({
+                            ...message,
+                            accountEmail: message.accountEmail || account.email,
+                            mailbox: message.mailbox || 'INBOX',
+                            deleted: deleteMatches || message.deleted
+                        });
+                    });
+                } catch (error) {
+                    errors.push(`${account.email}: ${error.message}`);
+                }
+            }
+
+            mailData = allMessages;
+            currentMailPage = 1;
+            renderMailTable(mailData);
+
+            const actionText = deleteMatches ? '删除匹配邮件' : '搜索收件箱';
+            const summary = `${actionText}完成：账号 ${accounts.length} 个，扫描 ${scanned} 封，命中 ${matched} 封，删除 ${deleted} 封。`;
+            showMailSection(summary);
+            hideLoading();
+
+            if (errors.length > 0) {
+                showModal('部分账号处理失败', errors.map(escapeHtml).join('<br>'));
+            } else if (deleteMatches) {
+                showModal('删除完成', summary);
+            }
+        }
+
         // 加载邮件列表
         function loadMailList(refreshToken, clientId, email, mailbox) {
             showLoading(); // 显示 Loading
             const password = localStorage.getItem('password');
-            const apiUrl = `/api/mail-all?refresh_token=${refreshToken}&client_id=${clientId}&email=${email}&mailbox=${mailbox}&response_type=json&password=${password}`;
+            const query = new URLSearchParams({
+                refresh_token: refreshToken,
+                client_id: clientId,
+                email,
+                mailbox,
+                response_type: 'json',
+                password: password || ''
+            });
+            const apiUrl = `/api/mail-all?${query.toString()}`;
 
             fetch(apiUrl)
                 .then(response => {
@@ -912,14 +1133,9 @@
                                 if (errorData.error === "Nothing to fetch") {
                                     // 更新全局邮件数据
                                     mailData = [];
-                                    // 隐藏其他内容区域
-                                    document.querySelectorAll('.content-section').forEach(section => {
-                                        section.classList.remove('active');
-                                    });
-                                    // 显示邮件列表区域
-                                    document.getElementById('mail-list').classList.add('active');
                                     // 渲染邮件列表
                                     renderMailTable(mailData);
+                                    showMailSection(`${email} ${mailbox} 暂无邮件。`);
                                     // 返回一个 resolved 的 Promise，避免进入 catch 块
                                     return Promise.resolve();
                                 } else {
@@ -943,16 +1159,15 @@
                     // 如果 data 存在（即不是 "Nothing to fetch" 的情况），更新全局邮件数据
                     if (data) {
 
-                        mailData = data;
+                        mailData = data.map(item => ({
+                            ...item,
+                            accountEmail: item.accountEmail || email,
+                            mailbox: item.mailbox || mailbox
+                        }));
 
-                        // 隐藏其他内容区域
-                        document.querySelectorAll('.content-section').forEach(section => {
-                            section.classList.remove('active');
-                        });
-                        // 显示邮件列表区域
-                        document.getElementById('mail-list').classList.add('active');
                         // 渲染邮件列表
                         renderMailTable(mailData);
+                        showMailSection(`${email} ${mailbox} 共 ${mailData.length} 封邮件。`);
                     }
                 })
                 .catch(error => {
@@ -991,12 +1206,16 @@
 
             pageData.forEach((item, index) => {
                 const row = document.createElement('tr');
+                const matchedKeywords = Array.isArray(item.matchedKeywords) ? item.matchedKeywords.join(', ') : '';
+                const deletedText = item.deleted ? '已删除' : '查看';
                 row.innerHTML = `
-                    <td>${item.send}</td>
-                    <td>${item.subject}</td>
-                    <td>${item.date}</td>
+                    <td>${escapeHtml(item.accountEmail || '')}</td>
+                    <td>${escapeHtml(item.send || '')}</td>
+                    <td>${escapeHtml(item.subject || '')}</td>
+                    <td>${escapeHtml(item.date || '')}</td>
+                    <td>${escapeHtml(matchedKeywords)}</td>
                     <td class="actions">
-                        <button onclick="viewMail(${start + index})">查看</button>
+                        <button onclick="viewMail(${start + index})">${deletedText}</button>
                     </td>
                 `;
                 mailTableBody.appendChild(row);
@@ -1033,11 +1252,12 @@
         function viewMail(index) {
             const item = mailData[index];
             if (item) {
-                document.getElementById('mail-modal-title').textContent = item.subject;
-                document.getElementById('mail-modal-sender').textContent = `发件人: ${item.send}`;
-                document.getElementById('mail-modal-subject').textContent = `主题: ${item.subject}`;
-                document.getElementById('mail-modal-date').textContent = `日期: ${item.date}`;
-                document.getElementById('mail-modal-content').innerHTML = `内容: ${item.html || item.text}`;
+                const content = item.text || item.html || '';
+                document.getElementById('mail-modal-title').textContent = item.subject || '';
+                document.getElementById('mail-modal-sender').textContent = `邮箱账号: ${item.accountEmail || ''}`;
+                document.getElementById('mail-modal-subject').textContent = `主题: ${item.subject || ''}`;
+                document.getElementById('mail-modal-date').textContent = `日期: ${item.date || ''}`;
+                document.getElementById('mail-modal-content').textContent = `内容: ${content}`;
                 document.getElementById('mail-modal').style.display = 'flex';
             } else {
                 console.error('邮件数据不存在:', index);
@@ -1051,7 +1271,7 @@
 
         // 删除邮箱
         function deleteEmail(index) {
-            const data = JSON.parse(localStorage.getItem('emailData')) || [];
+            const data = getStoredEmailData();
             data.splice(index, 1); // 删除指定项
             localStorage.setItem('emailData', JSON.stringify(data)); // 更新 localStorage
             loadData(); // 重新加载数据
@@ -1079,7 +1299,8 @@
             reader.onload = function (e) {
                 const content = e.target.result;
                 const lines = content.split('\n'); // 按行分割
-                const data = JSON.parse(localStorage.getItem('emailData')) || [];
+                const data = getStoredEmailData();
+                let importedCount = 0;
 
                 // 解析每一行
                 lines.forEach(line => {
@@ -1091,6 +1312,7 @@
                         const refreshToken = fields[3].trim();
                         if (email && password && clientId && refreshToken) {
                             data.push({ email, password, clientId, refreshToken });
+                            importedCount += 1;
                         }
                     }
                 });
@@ -1100,7 +1322,7 @@
                 // 重新加载数据
                 loadData();
 
-                showModal('导入成功', `成功导入 ${lines.length} 条数据！`);
+                showModal('导入成功', `成功导入 ${importedCount} 条数据！`);
             };
 
             reader.readAsText(file);
