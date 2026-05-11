@@ -509,6 +509,14 @@
             width: 360px !important;
         }
 
+        .code-tools input[type="text"] {
+            width: 320px !important;
+        }
+
+        .code-tools input[type="number"] {
+            width: 110px !important;
+        }
+
         .filter-summary {
             margin: 12px 0 0;
             color: #7f8c8d;
@@ -631,6 +639,15 @@
                     <input type="text" id="email-filter" placeholder="快速定位邮箱，输入邮箱关键词" oninput="applyEmailFilter()">
                     <button onclick="clearEmailFilter()">清空定位</button>
                     <button onclick="viewSelectedAllMailboxes()">查看选中收件箱+垃圾箱</button>
+                    <button onclick="exportCurrentEmails()">导出当前列表</button>
+                    <button onclick="exportSelectedEmails()">导出选中邮箱</button>
+                </div>
+                <div class="delimiter-input code-tools">
+                    <input type="text" id="code-keyword" placeholder="验证码邮件关键词/发件人，可留空">
+                    <input type="number" id="code-length" min="4" max="8" value="6" title="验证码位数">
+                    <input type="number" id="code-timeout" min="5" max="180" value="60" title="轮询秒数">
+                    <button onclick="fetchSelectedCodes(false)">获取选中验证码</button>
+                    <button onclick="fetchSelectedCodes(true)">轮询选中验证码</button>
                 </div>
                 <div class="filter-summary" id="filter-summary"></div>
             </div>
@@ -844,6 +861,63 @@
         function clearEmailFilter() {
             document.getElementById('email-filter').value = '';
             refreshEmailTable(true);
+        }
+
+        function getExportDelimiter() {
+            return document.getElementById('delimiter').value.trim() || '----';
+        }
+
+        function buildEmailExportText(accounts) {
+            const delimiter = getExportDelimiter();
+            return accounts.map(item => {
+                return [
+                    item.email || '',
+                    item.password || '',
+                    item.clientId || '',
+                    item.refreshToken || ''
+                ].join(delimiter);
+            }).join('\n');
+        }
+
+        function downloadTextFile(filename, content) {
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }
+
+        function exportAccounts(accounts, filenamePrefix) {
+            if (accounts.length === 0) {
+                showModal('错误', '没有可导出的邮箱。');
+                return;
+            }
+
+            const now = new Date();
+            const timestamp = [
+                now.getFullYear(),
+                String(now.getMonth() + 1).padStart(2, '0'),
+                String(now.getDate()).padStart(2, '0'),
+                String(now.getHours()).padStart(2, '0'),
+                String(now.getMinutes()).padStart(2, '0')
+            ].join('');
+
+            downloadTextFile(`${filenamePrefix}-${timestamp}.txt`, buildEmailExportText(accounts));
+            showModal('导出完成', `已导出 ${accounts.length} 个邮箱。`);
+        }
+
+        function exportCurrentEmails() {
+            const accounts = currentEmailRows.map(row => row.item);
+            exportAccounts(accounts, 'emails-current');
+        }
+
+        function exportSelectedEmails() {
+            const accounts = getSelectedAccounts();
+            exportAccounts(accounts, 'emails-selected');
         }
 
         // 从 localStorage 加载数据
@@ -1081,6 +1155,232 @@
 
             currentMailPage = 1;
             loadAllMailboxes(accounts);
+        }
+
+        function splitKeywords(value) {
+            return String(value || '')
+                .split(/[\n,，]+/)
+                .map(item => item.trim().toLowerCase())
+                .filter(Boolean);
+        }
+
+        function normalizeMessageText(message) {
+            return [
+                message.send,
+                message.subject,
+                message.text,
+                message.html
+            ].join('\n').toLowerCase();
+        }
+
+        function messageMatchesKeywords(message, keywords) {
+            if (keywords.length === 0) {
+                return true;
+            }
+
+            const text = normalizeMessageText(message);
+            return keywords.some(keyword => text.includes(keyword));
+        }
+
+        function extractVerificationCode(message, codeLength) {
+            const text = [
+                message.subject,
+                message.text,
+                message.html
+            ].join('\n');
+            const pattern = new RegExp(`(^|\\D)(\\d{${codeLength}})(?!\\d)`);
+            const matched = text.match(pattern);
+            return matched ? matched[2] : '';
+        }
+
+        function getCodeSettings() {
+            const codeLength = parseInt(document.getElementById('code-length').value, 10) || 6;
+            const timeoutSeconds = parseInt(document.getElementById('code-timeout').value, 10) || 60;
+
+            return {
+                keywords: splitKeywords(document.getElementById('code-keyword').value),
+                codeLength: Math.min(Math.max(codeLength, 4), 8),
+                timeoutSeconds: Math.min(Math.max(timeoutSeconds, 5), 180)
+            };
+        }
+
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        function fetchLatestMailboxMessage(account, mailbox) {
+            const password = localStorage.getItem('password');
+            const query = new URLSearchParams({
+                refresh_token: account.refreshToken,
+                client_id: account.clientId,
+                email: account.email,
+                mailbox,
+                response_type: 'json',
+                password: password || ''
+            });
+
+            return fetch(`/api/mail-new?${query.toString()}`)
+                .then(response => {
+                    if (!response.ok) {
+                        if (response.status == 401) {
+                            const authError = new Error('密码验证失败');
+                            authError.status = 401;
+                            throw authError;
+                        }
+                        throw new Error(`请求失败，状态码：${response.status}`);
+                    }
+
+                    return response.json();
+                })
+                .then(message => {
+                    const normalizedMessage = Array.isArray(message) ? message[0] : message;
+                    if (!normalizedMessage || normalizedMessage.error) {
+                        return null;
+                    }
+
+                    return {
+                        ...normalizedMessage,
+                        accountEmail: account.email,
+                        mailbox
+                    };
+                });
+        }
+
+        function fetchCodeMailboxMessages(account, mailbox, settings) {
+            if (settings.keywords.length === 0) {
+                return fetchLatestMailboxMessage(account, mailbox)
+                    .then(message => message ? [message] : []);
+            }
+
+            return fetch('/api/mail-search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    refresh_token: account.refreshToken,
+                    client_id: account.clientId,
+                    email: account.email,
+                    mailbox,
+                    keywords: settings.keywords.join(','),
+                    match_mode: 'any',
+                    scan_limit: document.getElementById('scan-limit').value || '100',
+                    delete_matches: false,
+                    password: localStorage.getItem('password') || ''
+                })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        if (response.status == 401) {
+                            const authError = new Error('密码验证失败');
+                            authError.status = 401;
+                            throw authError;
+                        }
+                        throw new Error(`请求失败，状态码：${response.status}`);
+                    }
+
+                    return response.json();
+                })
+                .then(result => {
+                    return (result.messages || []).map(message => ({
+                        ...message,
+                        accountEmail: message.accountEmail || account.email,
+                        mailbox: message.mailbox || mailbox
+                    }));
+                });
+        }
+
+        async function fetchCodeOnce(accounts, settings) {
+            const results = [];
+            const errors = [];
+
+            for (const account of accounts) {
+                const candidates = [];
+
+                for (const mailbox of ['INBOX', 'Junk']) {
+                    try {
+                        const messages = await fetchCodeMailboxMessages(account, mailbox, settings);
+                        candidates.push(...messages);
+                    } catch (error) {
+                        errors.push(`${account.email} ${mailbox}: ${error.message}`);
+                    }
+                }
+
+                candidates.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                for (const message of candidates) {
+                    if (!messageMatchesKeywords(message, settings.keywords)) {
+                        continue;
+                    }
+
+                    const code = extractVerificationCode(message, settings.codeLength);
+                    if (!code) {
+                        continue;
+                    }
+
+                    results.push({
+                        ...message,
+                        verificationCode: code,
+                        matchedKeywords: [`验证码: ${code}`]
+                    });
+                    break;
+                }
+            }
+
+            return { results, errors };
+        }
+
+        async function fetchSelectedCodes(shouldPoll) {
+            const accounts = getSelectedAccounts();
+            if (accounts.length === 0) {
+                showModal('错误', '请先勾选要获取验证码的邮箱账号！');
+                return;
+            }
+
+            const settings = getCodeSettings();
+            const deadline = Date.now() + settings.timeoutSeconds * 1000;
+            const foundByEmail = new Map();
+            const allErrors = [];
+
+            showLoading();
+
+            do {
+                const pendingAccounts = accounts.filter(account => !foundByEmail.has(account.email));
+                if (pendingAccounts.length === 0) {
+                    break;
+                }
+
+                const { results, errors } = await fetchCodeOnce(pendingAccounts, settings);
+                errors.forEach(error => allErrors.push(error));
+                results.forEach(message => {
+                    if (!foundByEmail.has(message.accountEmail)) {
+                        foundByEmail.set(message.accountEmail, message);
+                    }
+                });
+
+                if (!shouldPoll || foundByEmail.size === accounts.length) {
+                    break;
+                }
+
+                await delay(5000);
+            } while (Date.now() < deadline);
+
+            hideLoading();
+
+            const codeMessages = Array.from(foundByEmail.values());
+            mailData = codeMessages;
+            currentMailPage = 1;
+            renderMailTable(mailData);
+            showMailSection(`验证码获取完成：选中 ${accounts.length} 个邮箱，找到 ${codeMessages.length} 个验证码。`);
+
+            if (codeMessages.length > 0) {
+                const codeLines = codeMessages.map(item => `${escapeHtml(item.accountEmail)}：<strong>${escapeHtml(item.verificationCode)}</strong>`);
+                showModal('验证码结果', codeLines.join('<br>'));
+            } else if (allErrors.length > 0) {
+                showModal('未找到验证码', allErrors.map(escapeHtml).join('<br>'));
+            } else {
+                showModal('未找到验证码', '最新收件箱/垃圾箱邮件中没有匹配到验证码。可以输入验证码邮件关键词后再轮询。');
+            }
         }
 
         function getSearchSettings() {
@@ -1378,7 +1678,7 @@
                 document.getElementById('mail-modal-sender').textContent = `邮箱账号: ${item.accountEmail || ''}`;
                 document.getElementById('mail-modal-subject').textContent = `主题: ${item.subject || ''}`;
                 document.getElementById('mail-modal-date').textContent = `日期: ${item.date || ''}`;
-                document.getElementById('mail-modal-content').textContent = `内容: ${content}`;
+                document.getElementById('mail-modal-content').textContent = `${item.verificationCode ? `验证码: ${item.verificationCode}\n` : ''}内容: ${content}`;
                 document.getElementById('mail-modal').style.display = 'flex';
             } else {
                 console.error('邮件数据不存在:', index);
